@@ -1,11 +1,26 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom, map, Observable } from 'rxjs';
 import { Readable } from 'stream';
 
 @Injectable()
 export class AppService {
+  private readonly logger = new Logger(AppService.name);
+
   constructor(private readonly http: HttpService) {}
+
+  private safeStringify(obj: any, max = 1000): string {
+    try {
+      const s = typeof obj === 'string' ? obj : JSON.stringify(obj);
+      return s.length > max ? s.slice(0, max) + '... (truncated)' : s;
+    } catch {
+      try {
+        return String(obj);
+      } catch {
+        return '[unserializable]';
+      }
+    }
+  }
 
   async getModels(headers: any): Promise<any> {
     const auth: string | null = headers['authorization'];
@@ -20,22 +35,85 @@ export class AppService {
       }),
     );
 
-    const filteredModels = resp.data.filter((model: any) => {
-      return model.providers?.some((provider: string) =>
-        provider.toLowerCase() === providerKey
+    // Basic runtime info for debugging
+    this.logger.debug(
+      `Fetched models from upstream ${url} - status: ${resp?.status ?? 'unknown'}, dataType: ${typeof resp?.data}`,
+    );
+
+    // Normalize resp.data into an array of models
+    let models: any[] = [];
+
+    if (Array.isArray(resp.data)) {
+      models = resp.data;
+    } else if (resp.data && Array.isArray(resp.data.models)) {
+      models = resp.data.models;
+    } else if (resp.data && Array.isArray(resp.data.data)) {
+      models = resp.data.data;
+    } else if (typeof resp.data === 'string') {
+      // Sometimes the response may be a JSON string
+      try {
+        const parsed = JSON.parse(resp.data);
+        if (Array.isArray(parsed)) models = parsed;
+        else if (parsed && Array.isArray(parsed.models)) models = parsed.models;
+        else if (parsed && Array.isArray(parsed.data)) models = parsed.data;
+      } catch (e) {
+        this.logger.warn(
+          `Unable to parse string response from upstream ${url}: ${this.safeStringify(resp.data, 500)}`,
+          e as any,
+        );
+      }
+    } else {
+      // Unexpected shape
+      this.logger.warn(
+        `Unexpected models response shape from upstream ${url}: ${this.safeStringify(resp.data, 1000)}`,
+      );
+    }
+
+    // If models array is still empty, surface a helpful error
+    if (!models || models.length === 0) {
+      const sample = this.safeStringify(resp.data, 1000);
+      const msg = `No models found for provider '${providerKey}' from upstream ${upstream}. Upstream response shape: ${sample}`;
+      this.logger.error(msg);
+      throw new NotFoundException(msg);
+    }
+
+    // Filter models by provider key in a defensive way
+    const filteredModels = models.filter((model: any) => {
+      // Normalize providers to an array of strings
+      let providers: string[] = [];
+
+      if (Array.isArray(model.providers)) {
+        providers = model.providers;
+      } else if (model.providers && typeof model.providers === 'object') {
+        // If providers is an object, treat its keys as provider identifiers
+        providers = Object.keys(model.providers);
+      } else if (typeof model.providers === 'string') {
+        providers = [model.providers];
+      }
+
+      return providers.some((provider: string) =>
+        String(provider).toLowerCase() === providerKey,
       );
     });
 
+    // If filtering removed all models, give a descriptive error as well
+    if (filteredModels.length === 0) {
+      const sample = this.safeStringify(models.slice(0, 5), 1000);
+      const msg = `No models matched provider '${providerKey}' in upstream ${upstream}. Sample upstream models: ${sample}`;
+      this.logger.error(msg);
+      throw new NotFoundException(msg);
+    }
+
     return {
-      "object": "list",
-      "data": filteredModels.map((model: any) => ({
+      object: 'list',
+      data: filteredModels.map((model: any) => ({
         id: model.name,
-        object: "model",
+        object: 'model',
         created: 0,
-        owned_by: "",
+        owned_by: '',
         image: model.image || false,
-        provider: true
-      }))
+        provider: true,
+      })),
     };
   }
 
@@ -43,9 +121,7 @@ export class AppService {
     const upstream = process.env.LLM_UPSTREAM;
     const url = `${upstream}/v1/providers`;
 
-    const response = await lastValueFrom(
-      this.http.get<string>(url)
-    );
+    const response = await lastValueFrom(this.http.get<string>(url));
     return response.data;
   }
 
@@ -61,14 +137,12 @@ export class AppService {
     return this.http
       .post(url, body, {
         headers: {
-          'Accept': 'application/json',
+          Accept: 'application/json',
           'Content-Type': 'application/json',
           ...(auth ? { Authorization: auth } : {}),
         },
-        responseType: 'stream'
+        responseType: 'stream',
       })
-      .pipe(
-        map(resp => resp.data as Readable)
-      );
+      .pipe(map((resp) => resp.data as Readable));
   }
 }
