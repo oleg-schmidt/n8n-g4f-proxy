@@ -59,7 +59,7 @@ export class AppService {
       } catch (e) {
         this.logger.warn(
           `Unable to parse string response from upstream ${url}: ${this.safeStringify(resp.data, 500)}`,
-          e as any,
+          e,
         );
       }
     } else {
@@ -91,8 +91,8 @@ export class AppService {
         providers = [model.providers];
       }
 
-      return providers.some((provider: string) =>
-        String(provider).toLowerCase() === providerKey,
+      return providers.some(
+        (provider: string) => String(provider).toLowerCase() === providerKey,
       );
     });
 

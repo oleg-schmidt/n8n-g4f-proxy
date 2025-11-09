@@ -17,8 +17,10 @@ export class AppController {
 
   @Post('/v1/chat/completions')
   postCompletions(@Req() req: Request, @Res() res: Response) {
-    this.appService.postCompletions(req.body, req.headers).subscribe(stream => {
-      stream.pipe(res as any);
-    });
+    this.appService
+      .postCompletions(req.body, req.headers)
+      .subscribe((stream) => {
+        stream.pipe(res as any);
+      });
   }
 }
