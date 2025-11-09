@@ -62,6 +62,46 @@ export class AppService {
           e,
         );
       }
+    } else if (resp.data && typeof resp.data === 'object') {
+      // Check if response is a provider-keyed object format
+      // e.g., {"Anthropic": ["model1", "model2"], "OpenaiAPI": ["model3"]}
+      const isProviderKeyedFormat = Object.values(resp.data).every(
+        (value) =>
+          Array.isArray(value) &&
+          value.every((item) => typeof item === 'string'),
+      );
+
+      if (isProviderKeyedFormat) {
+        // Transform provider-keyed format to array of model objects
+        // Handle models that appear under multiple providers
+        const modelMap = new Map<string, string[]>();
+
+        for (const [providerName, modelNames] of Object.entries(resp.data)) {
+          if (Array.isArray(modelNames)) {
+            for (const modelName of modelNames) {
+              if (typeof modelName === 'string') {
+                const existingProviders = modelMap.get(modelName) || [];
+                modelMap.set(modelName, [...existingProviders, providerName]);
+              }
+            }
+          }
+        }
+
+        // Convert map to array of model objects
+        models = Array.from(modelMap.entries()).map(([name, providers]) => ({
+          name,
+          providers,
+        }));
+
+        this.logger.debug(
+          `Transformed provider-keyed format: ${modelMap.size} unique models from ${Object.keys(resp.data).length} providers`,
+        );
+      } else {
+        // Unexpected shape
+        this.logger.warn(
+          `Unexpected models response shape from upstream ${url}: ${this.safeStringify(resp.data, 1000)}`,
+        );
+      }
     } else {
       // Unexpected shape
       this.logger.warn(
